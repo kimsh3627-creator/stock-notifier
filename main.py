@@ -1,5 +1,7 @@
 import json
 import os
+from datetime import datetime, timedelta
+import pytz
 import requests
 import yfinance as yf
 
@@ -17,34 +19,72 @@ def get_access_token():
     response = requests.post(url, data=data)
     result = response.json()
 
-    print("카카오 토큰 응답 전문:", result)
-
     if "access_token" in result:
         return result["access_token"]
     else:
-        print("Access Token 발급 실패")
+        print("Access Token 발급 실패:", result)
         return None
+
+
+def get_closest_price(df, target_dt):
+    """주어진 시간(target_dt) 이전의 가장 가까운 종가/종가 수치를 가져옵니다."""
+    filtered = df[df.index <= target_dt]
+    if not filtered.empty:
+        return filtered["Close"].iloc[-1]
+    return df["Close"].iloc[0]
+
+
+def format_change(current, past):
+    if past is None or past == 0:
+        return "-"
+    diff = current - past
+    pct = (diff / past) * 100
+    sign = "▲" if diff > 0 else ("▼" if diff < 0 else "-")
+    return f"{sign} {abs(diff):,.2f} ({pct:+.2f}%)"
 
 
 def get_stock_data():
     tickers = {"나스닥": "^IXIC", "S&P 500": "^GSPC", "원/달러 환율": "KRW=X"}
-    lines = []
+    results = []
 
     for name, code in tickers.items():
         ticker = yf.Ticker(code)
-        df = ticker.history(period="2mo")
-        if not df.empty and len(df) >= 2:
-            close_today = df["Close"].iloc[-1]
-            close_prev = df["Close"].iloc[-2]
-            diff = close_today - close_prev
-            pct = (diff / close_prev) * 100
+        # 시간 단위 비교를 위해 1시간 간격(1h) 데이터 수집 (최대 2개월치)
+        df = ticker.history(period="2mo", interval="1h")
 
-            sign = "▲" if diff > 0 else ("▼" if diff < 0 else "-")
-            lines.append(
-                f"{name}: {close_today:,.2f} ({sign} {abs(diff):,.2f}, {pct:+.2f}%)"
-            )
+        if df.empty:
+            continue
 
-    return "\n".join(lines)
+        now_dt = df.index[-1]
+        current_price = df["Close"].iloc[-1]
+
+        # 비교 시점 계산
+        t_6h = now_dt - timedelta(hours=6)
+        t_12h = now_dt - timedelta(hours=12)
+        t_1d = now_dt - timedelta(days=1)
+        t_2d = now_dt - timedelta(days=2)
+        t_1w = now_dt - timedelta(weeks=1)
+        t_1m = now_dt - timedelta(days=30)
+
+        p_6h = get_closest_price(df, t_6h)
+        p_12h = get_closest_price(df, t_12h)
+        p_1d = get_closest_price(df, t_1d)
+        p_2d = get_closest_price(df, t_2d)
+        p_1w = get_closest_price(df, t_1w)
+        p_1m = get_closest_price(df, t_1m)
+
+        text = f"📌 [{name}]\n"
+        text += f"• 현재가: {current_price:,.2f}\n"
+        text += f"• 6시간 전: {format_change(current_price, p_6h)}\n"
+        text += f"• 12시간 전: {format_change(current_price, p_12h)}\n"
+        text += f"• 1일 전: {format_change(current_price, p_1d)}\n"
+        text += f"• 2일 전: {format_change(current_price, p_2d)}\n"
+        text += f"• 1주일 전: {format_change(current_price, p_1w)}\n"
+        text += f"• 1개월 전: {format_change(current_price, p_1m)}"
+
+        results.append(text)
+
+    return "\n\n".join(results)
 
 
 def send_kakao_message(text, access_token):
@@ -54,7 +94,7 @@ def send_kakao_message(text, access_token):
         "template_object": json.dumps(
             {
                 "object_type": "text",
-                "text": f"📊 오늘 증시 리포트\n\n{text}",
+                "text": f"📊 증시 및 환율 상세 데이터\n\n{text}",
                 "link": {
                     "web_url": "https://finance.yahoo.com",
                     "mobile_web_url": "https://finance.yahoo.com",
