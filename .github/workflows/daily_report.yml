@@ -1,0 +1,31 @@
+name: Daily Stock & FX Kakao Notifier
+
+on:
+  schedule:
+    # UTC 기준 23:00 (한국 시간 아침 08:00)
+    - cron: '0 23 * * *'
+  workflow_dispatch: # GitHub에서 수동 버튼으로도 실행 가능하게 설정
+
+jobs:
+  run-report:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: 코드 체크아웃
+        uses: actions/checkout@v3
+
+      - name: 파이썬 환경 세팅
+        uses: actions/setup-python@v4
+        with:
+          python-version: '3.10'
+
+      - name: 라이브러리 설치
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt
+
+      - name: 스크립트 실행 및 카톡 발송
+        env:
+          KAKAO_REST_KEY: ${{ secrets.KAKAO_REST_KEY }}
+          KAKAO_REFRESH_TOKEN: ${{ secrets.KAKAO_REFRESH_TOKEN }}
+        run: python main.py

@@ -1,0 +1,4 @@
+requests>=2.20.0
+beautifulsoup4>=4.9.0
+lxml
+streamlit>=1.0.0
