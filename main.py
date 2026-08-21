@@ -106,10 +106,20 @@ def send_kakao_message(text):
             }
         )
     }
+    
+# 토큰 요청 post 직후 응답 내용을 출력하도록 수정
+res = requests.post("https://kauth.kakao.com/oauth/token", data=payload)
+print("카카오 토큰 응답 전문:", res.json())  # <-- 이 줄 추가
+
+if "access_token" in res.json():
+    return res.json()["access_token"]
+else:
+    print("Access Token 발급 실패")
+
 
     res = requests.post(url, headers=headers, data=payload)
     print("전송 결과:", res.json())
-
+    
 
 if __name__ == "__main__":
     message_content = build_message()
