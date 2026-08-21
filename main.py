@@ -1,7 +1,6 @@
 import json
 import os
 from datetime import datetime, timedelta
-import pytz
 import requests
 import yfinance as yf
 
@@ -27,20 +26,20 @@ def get_access_token():
 
 
 def get_closest_price(df, target_dt):
-    """주어진 시간(target_dt) 이전의 가장 가까운 종가/종가 수치를 가져옵니다."""
+    """주어진 시간(target_dt) 이전의 가장 가까운 종가 수치를 가져옵니다."""
     filtered = df[df.index <= target_dt]
     if not filtered.empty:
         return filtered["Close"].iloc[-1]
     return df["Close"].iloc[0]
 
 
-def format_change(current, past):
+def format_value_and_change(current, past):
     if past is None or past == 0:
         return "-"
     diff = current - past
-    pct = (diff / past) * 100
     sign = "▲" if diff > 0 else ("▼" if diff < 0 else "-")
-    return f"{sign} {abs(diff):,.2f} ({pct:+.2f}%)"
+    # 과거 실제 수치 (증감분) 형식으로 반환
+    return f"{past:,.2f} ({sign} {abs(diff):,.2f})"
 
 
 def get_stock_data():
@@ -49,7 +48,7 @@ def get_stock_data():
 
     for name, code in tickers.items():
         ticker = yf.Ticker(code)
-        # 시간 단위 비교를 위해 1시간 간격(1h) 데이터 수집 (최대 2개월치)
+        # 1시간 단위 데이터 수집
         df = ticker.history(period="2mo", interval="1h")
 
         if df.empty:
@@ -58,7 +57,7 @@ def get_stock_data():
         now_dt = df.index[-1]
         current_price = df["Close"].iloc[-1]
 
-        # 비교 시점 계산
+        # 과거 비교 시점
         t_6h = now_dt - timedelta(hours=6)
         t_12h = now_dt - timedelta(hours=12)
         t_1d = now_dt - timedelta(days=1)
@@ -75,12 +74,12 @@ def get_stock_data():
 
         text = f"📌 [{name}]\n"
         text += f"• 현재가: {current_price:,.2f}\n"
-        text += f"• 6시간 전: {format_change(current_price, p_6h)}\n"
-        text += f"• 12시간 전: {format_change(current_price, p_12h)}\n"
-        text += f"• 1일 전: {format_change(current_price, p_1d)}\n"
-        text += f"• 2일 전: {format_change(current_price, p_2d)}\n"
-        text += f"• 1주일 전: {format_change(current_price, p_1w)}\n"
-        text += f"• 1개월 전: {format_change(current_price, p_1m)}"
+        text += f"• 6시간 전: {format_value_and_change(current_price, p_6h)}\n"
+        text += f"• 12시간 전: {format_value_and_change(current_price, p_12h)}\n"
+        text += f"• 1일 전: {format_value_and_change(current_price, p_1d)}\n"
+        text += f"• 2일 전: {format_value_and_change(current_price, p_2d)}\n"
+        text += f"• 1주일 전: {format_value_and_change(current_price, p_1w)}\n"
+        text += f"• 1개월 전: {format_value_and_change(current_price, p_1m)}"
 
         results.append(text)
 
@@ -94,7 +93,7 @@ def send_kakao_message(text, access_token):
         "template_object": json.dumps(
             {
                 "object_type": "text",
-                "text": f"📊 증시 및 환율 상세 데이터\n\n{text}",
+                "text": f"📊 증시 및 환율 시점별 리포트\n\n{text}",
                 "link": {
                     "web_url": "https://finance.yahoo.com",
                     "mobile_web_url": "https://finance.yahoo.com",
