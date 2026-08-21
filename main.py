@@ -38,7 +38,6 @@ def format_value_and_change(current, past):
         return "-"
     diff = current - past
     sign = "▲" if diff > 0 else ("▼" if diff < 0 else "-")
-    # 과거 실제 수치 (증감분) 형식으로 반환
     return f"{past:,.2f} ({sign} {abs(diff):,.2f})"
 
 
@@ -48,8 +47,8 @@ def get_stock_data():
 
     for name, code in tickers.items():
         ticker = yf.Ticker(code)
-        # 1시간 단위 데이터 수집
-        df = ticker.history(period="2mo", interval="1h")
+        # 1년 내 최고가 계산을 위해 period를 "1y"로 지정
+        df = ticker.history(period="1y", interval="1d")
 
         if df.empty:
             continue
@@ -57,16 +56,16 @@ def get_stock_data():
         now_dt = df.index[-1]
         current_price = df["Close"].iloc[-1]
 
-        # 과거 비교 시점
-        t_6h = now_dt - timedelta(hours=6)
-        t_12h = now_dt - timedelta(hours=12)
+        # 1년 내 최고가 및 최고가 대비 하락률 계산
+        max_price_1y = df["High"].max()
+        drop_from_high_pct = ((current_price - max_price_1y) / max_price_1y) * 100
+
+        # 과거 비교 시점 (일 단위)
         t_1d = now_dt - timedelta(days=1)
         t_2d = now_dt - timedelta(days=2)
         t_1w = now_dt - timedelta(weeks=1)
         t_1m = now_dt - timedelta(days=30)
 
-        p_6h = get_closest_price(df, t_6h)
-        p_12h = get_closest_price(df, t_12h)
         p_1d = get_closest_price(df, t_1d)
         p_2d = get_closest_price(df, t_2d)
         p_1w = get_closest_price(df, t_1w)
@@ -74,8 +73,7 @@ def get_stock_data():
 
         text = f"📌 [{name}]\n"
         text += f"• 현재가: {current_price:,.2f}\n"
-        text += f"• 6시간 전: {format_value_and_change(current_price, p_6h)}\n"
-        text += f"• 12시간 전: {format_value_and_change(current_price, p_12h)}\n"
+        text += f"• 1년 최고가 대비: {drop_from_high_pct:+.2f}% (최고가 {max_price_1y:,.2f})\n"
         text += f"• 1일 전: {format_value_and_change(current_price, p_1d)}\n"
         text += f"• 2일 전: {format_value_and_change(current_price, p_2d)}\n"
         text += f"• 1주일 전: {format_value_and_change(current_price, p_1w)}\n"
