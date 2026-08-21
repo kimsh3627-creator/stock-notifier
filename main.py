@@ -25,7 +25,7 @@ def fetch_market_data(ticker_symbol):
     """지정한 티커의 [현재가, 1일전, 2일전, 1주일전, 1개월전] 종가를 가져옵니다."""
     ticker = yf.Ticker(ticker_symbol)
     # 최근 2개월치 일별 데이터 다운로드
-    df = ticker.history(period="2m")
+    df = ticker.history(period="2mo")
 
     if len(df) == 0:
         return None
