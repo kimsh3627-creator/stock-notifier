@@ -1,11 +1,45 @@
 import json
 import os
+import io
 import pandas as pd
 import requests
 import yfinance as yf
 
 REST_KEY = os.getenv("KAKAO_REST_KEY")
 REFRESH_TOKEN = os.getenv("KAKAO_REFRESH_TOKEN")
+
+# 위키피디아 차단 시 사용할 예비 상위 300개 종목 리스트
+FALLBACK_TICKERS = [
+    "AAPL", "MSFT", "NVDA", "AMZN", "GOOGL", "META", "BRK-B", "TSLA", "AVGO", "WMT",
+    "JPM", "ELI", "V", "UNH", "XOM", "ORCL", "MA", "PG", "COST", "HD",
+    "JNJ", "BAC", "ABBV", "NFLX", "CRM", "KO", "CVX", "MRK", "AMD", "PEP",
+    "TMOV", "NOW", "LIN", "ACN", "WFC", "CSCO", "MCD", "ADBE", "DIS", "PM",
+    "ABT", "GE", "ISRG", "TXN", "INTU", "VZ", "AMAT", "QCOM", "PFE", "AMGN",
+    "BKNG", "CAT", "UNP", "GS", "MS", "SPGI", "LOW", "AXP", "DHR", "RTX",
+    "SYK", "T", "HON", "COP", "PTR", "BSX", "C", "PGR", "BLK", "SCHW",
+    "TJX", "NKE", "BA", "ADSK", "DE", "VRTX", "MU", "LRCX", "ADI", "LMT",
+    "FI", "PANW", "SBUX", "GILD", "MMC", "CB", "INTC", "MDT", "UPS", "PLTR",
+    "AON", "ADI", "MDLZ", "CI", "MO", "REGN", "SHW", "CL", "ELV", "ADP",
+    "WM", "ITW", "BX", "ETN", "EOG", "BSX", "ICE", "BDX", "BKR", "MCK",
+    "CVS", "PH", "HUM", "SLB", "SNPS", "CDNS", "ORLY", "HCA", "FCX", "GD",
+    "WELL", "USB", "EMR", "PNC", "CSX", "CTAS", "PXD", "ROP", "MAR", "CME",
+    "NSC", "AER", "TGT", "ECL", "MCO", "DXCM", "FDX", "APTV", "GM", "PCAR",
+    "SO", "AIG", "RMD", "MET", "D", "KMB", "AJG", "AZO", "TT", "AFL",
+    "O", "TRV", "MSI", "PSX", "MPC", "KMI", "WMB", "MCHP", "COR", "AEP",
+    "HES", "COF", "NOC", "SRE", "NUE", "ECL", "PRU", "FAST", "GEHC", "GIS",
+    "VLO", "IQV", "DHI", "XEL", "HSY", "KR", "OTIS", "ALL", "ROK", "DFS",
+    "KHC", "SYY", "PAYX", "MPWR", "BK", "LEN", "IDXX", "K", "ED", "HAL",
+    "DVN", "CTVA", "PPG", "MTB", "AME", "PEG", "EXC", "ODFL", "CTSH", "GLW",
+    "FANG", "YUM", "EFX", "VICI", "ADM", "AWK", "BIIB", "CDW", "VTR", "EA",
+    "LHX", "IRM", "ACGL", "WEC", "DAL", "CBRE", "WTW", "GWW", "BALL", "ANSS",
+    "GRMN", "ALGN", "FTNT", "URI", "KEYS", "VMC", "GPN", "DOV", "STZ", "CMS",
+    "CAH", "EIX", "STE", "HIG", "SBAC", "ES", "DTE", "EXR", "DG", "DHI",
+    "MRO", "STT", "TSCO", "FITB", "MTD", "XYL", "MLM", "AVY", "IFF", "CLX",
+    "TRGP", "PHM", "RCL", "MKC", "PFG", "HBAN", "CINF", "CHD", "A", "FE",
+    "TDG", "ARE", "WTW", "BRO", "EG", "HPE", "EXPD", "KEY", "RF", "CF",
+    "MAA", "JCI", "INVH", "NTAP", "WDC", "TYL", "WRB", "L", "PKI", "DGX",
+    "SPTN", "SJM", "AKAM", "HOLX", "KIM", "SWKS", "IP", "ESS", "DOC", "CPB"
+]
 
 
 def get_access_token():
@@ -28,7 +62,7 @@ def get_access_token():
 def get_market_summary():
     results = []
 
-    # 1. 나스닥 및 S&P 500 (현재가 + 1년 최고가 대비)
+    # 1. 나스닥 및 S&P 500
     index_tickers = {"나스닥": "^IXIC", "S&P 500": "^GSPC"}
     for name, code in index_tickers.items():
         ticker = yf.Ticker(code)
@@ -44,7 +78,7 @@ def get_market_summary():
             text += f"• 1년 최고가 대비: {drop_pct:+.2f}% (최고가 {max_price_1y:,.2f})"
             results.append(text)
 
-    # 2. 원/달러 환율 (현재가만)
+    # 2. 원/달러 환율
     fx_ticker = yf.Ticker("KRW=X")
     fx_df = fx_ticker.history(period="5d", interval="1d")
     if not fx_df.empty:
@@ -54,31 +88,33 @@ def get_market_summary():
     return "\n\n".join(results)
 
 
-def get_sp500_filtered_stocks():
-    """
-    S&P 500 상위 300개 종목 필터링:
-    - 5 <= PER <= 15
-    - 0 <= PBR <= 10
-    - 1년 최고가 대비 -30% 이상 하락
-    """
+def get_sp500_tickers():
+    """위키피디아에서 S&P 500 티커 수집 (User-Agent 설정으로 차단 우회 및 예비 티커 마련)"""
     try:
         url = "https://en.wikipedia.org/wiki/List_of_S%26P_500_companies"
-        tables = pd.read_html(url)
-        sp500_df = tables[0]
-        # 상위 300개 종목 추출
-        raw_tickers = sp500_df["Symbol"].head(300).tolist()
-    except Exception as e:
-        print("S&P 500 티커 수집 실패:", e)
-        return "🔍 [S&P 500 특이 종목]\n• 데이터 수집 중 오류 발생"
+        headers = {
+            "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
+        }
+        res = requests.get(url, headers=headers)
+        res.raise_for_status()
 
+        tables = pd.read_html(io.StringIO(res.text))
+        sp500_df = tables[0]
+        tickers = sp500_df["Symbol"].head(300).tolist()
+        return [t.replace(".", "-") for t in tickers]
+    except Exception as e:
+        print("위키피디아 크롤링 실패, 예비 리스트 사용:", e)
+        return FALLBACK_TICKERS
+
+
+def get_sp500_filtered_stocks():
+    raw_tickers = get_sp500_tickers()
     filtered = []
 
-    # 50개씩 분할 처리하여 API 차단 방지 및 속도 최적화
+    # 50개씩 분할 처리
     chunk_size = 50
     for i in range(0, len(raw_tickers), chunk_size):
-        chunk = raw_tickers[i : i + chunk_size]
-        chunk_symbols = [t.replace(".", "-") for t in chunk]
-
+        chunk_symbols = raw_tickers[i : i + chunk_size]
         ticker_objects = yf.Tickers(" ".join(chunk_symbols))
 
         for symbol in chunk_symbols:
@@ -89,9 +125,7 @@ def get_sp500_filtered_stocks():
                 pe = info.get("trailingPE")
                 pbr = info.get("priceToBook")
                 high_52w = info.get("fiftyTwoWeekHigh")
-                current_price = info.get("currentPrice") or info.get(
-                    "regularMarketPrice"
-                )
+                current_price = info.get("currentPrice") or info.get("regularMarketPrice")
 
                 if pe and pbr and high_52w and current_price:
                     drop_pct = ((current_price - high_52w) / high_52w) * 100
@@ -114,14 +148,12 @@ def get_sp500_filtered_stocks():
     if not filtered:
         return "🔍 [S&P 500 특이 종목 (5≤PER≤15, 0≤PBR≤10, -30%↓)]\n• 조건에 해당하는 종목이 없습니다."
 
-    # 하락률이 높은 순서로 정렬
     filtered.sort(key=lambda x: x["drop_pct"])
 
     lines = [
         f"🔍 [S&P 500 특이 종목 (5≤PER≤15, 0≤PBR≤10, -30%↓)] (상위 300개 중 {len(filtered)}개)"
     ]
 
-    # 카카오톡 글자 수 초과 방지: 최대 10개까지만 메시지에 포함
     display_limit = 10
     for item in filtered[:display_limit]:
         lines.append(
@@ -165,7 +197,6 @@ if __name__ == "__main__":
 
         full_message = f"📊 증시·환율 리포트\n\n{market_summary}\n\n{sp500_summary}"
 
-        # 카카오톡 텍스트 글자 수 제한(1,000자) 안전 장치
         if len(full_message) > 980:
             full_message = full_message[:970] + "\n...(길이 제한으로 생략)"
 
