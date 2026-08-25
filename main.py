@@ -1,6 +1,5 @@
 import json
 import os
-from datetime import datetime, timedelta
 import pandas as pd
 import requests
 import yfinance as yf
@@ -26,68 +25,44 @@ def get_access_token():
         return None
 
 
-def get_closest_price(df, target_dt):
-    """주어진 시간(target_dt) 이전의 가장 가까운 종가 수치를 가져옵니다."""
-    filtered = df[df.index <= target_dt]
-    if not filtered.empty:
-        return filtered["Close"].iloc[-1]
-    return df["Close"].iloc[0]
-
-
-def format_value_and_change(current, past):
-    if past is None or past == 0:
-        return "-"
-    diff = current - past
-    sign = "▲" if diff > 0 else ("▼" if diff < 0 else "-")
-    return f"{past:,.2f} ({sign} {abs(diff):,.2f})"
-
-
 def get_market_summary():
-    tickers = {"나스닥": "^IXIC", "S&P 500": "^GSPC", "원/달러 환율": "KRW=X"}
     results = []
 
-    for name, code in tickers.items():
+    # 1. 나스닥 및 S&P 500 (현재가 + 1년 최고가 대비 하락률)
+    index_tickers = {"나스닥": "^IXIC", "S&P 500": "^GSPC"}
+    for name, code in index_tickers.items():
         ticker = yf.Ticker(code)
         df = ticker.history(period="1y", interval="1d")
 
-        if df.empty:
-            continue
+        if not df.empty:
+            current_price = df["Close"].iloc[-1]
+            max_price_1y = df["High"].max()
+            drop_pct = ((current_price - max_price_1y) / max_price_1y) * 100
 
-        now_dt = df.index[-1]
-        current_price = df["Close"].iloc[-1]
+            text = f"📌 [{name}]\n"
+            text += f"• 현재가: {current_price:,.2f}\n"
+            text += f"• 1년 최고가 대비: {drop_pct:+.2f}% (최고가 {max_price_1y:,.2f})"
+            results.append(text)
 
-        max_price_1y = df["High"].max()
-        drop_from_high_pct = ((current_price - max_price_1y) / max_price_1y) * 100
-
-        t_1d = now_dt - timedelta(days=1)
-        t_1w = now_dt - timedelta(weeks=1)
-        t_1m = now_dt - timedelta(days=30)
-
-        p_1d = get_closest_price(df, t_1d)
-        p_1w = get_closest_price(df, t_1w)
-        p_1m = get_closest_price(df, t_1m)
-
-        text = f"📌 [{name}]\n"
-        text += f"• 현재가: {current_price:,.2f}\n"
-        text += f"• 1년 최고가 대비: {drop_from_high_pct:+.2f}% (최고가 {max_price_1y:,.2f})\n"
-        text += f"• 1일 전: {format_value_and_change(current_price, p_1d)}\n"
-        text += f"• 1주일 전: {format_value_and_change(current_price, p_1w)}\n"
-        text += f"• 1개월 전: {format_value_and_change(current_price, p_1m)}"
-
-        results.append(text)
+    # 2. 원/달러 환율 (현재가만)
+    fx_ticker = yf.Ticker("KRW=X")
+    fx_df = fx_ticker.history(period="5d", interval="1d")
+    if not fx_df.empty:
+        fx_current = fx_df["Close"].iloc[-1]
+        results.append(f"📌 [원/달러 환율]\n• 현재가: {fx_current:,.2f}원")
 
     return "\n\n".join(results)
 
 
 def get_sp500_filtered_stocks():
-    """S&P 500 종목 중 PER 20 이하 & 1년 최고가 대비 30% 이상 하락한 종목 추출"""
+    """S&P 500 종목 중 PER 20 이하 & 1년 최고가 대비 30% 이상 하락한 전체 종목 추출"""
     try:
         url = "https://en.wikipedia.org/wiki/List_of_S%26P_500_companies"
         tables = pd.read_html(url)
         sp500_df = tables[0]
         tickers = sp500_df["Symbol"].tolist()
     except Exception as e:
-        print("S&P 500 리스트 가져오기 실패:", e)
+        print("S&P 500 티커 수집 실패:", e)
         return ""
 
     filtered = []
@@ -105,7 +80,7 @@ def get_sp500_filtered_stocks():
             if pe and high_52w and current_price:
                 drop_pct = ((current_price - high_52w) / high_52w) * 100
 
-                # 조건: PER <= 20 이고 1년 최고가 대비 -30% 이하
+                # PER <= 20 이고 고점 대비 -30% 이하
                 if 0 < pe <= 20 and drop_pct <= -30:
                     filtered.append(
                         {
@@ -120,16 +95,16 @@ def get_sp500_filtered_stocks():
             continue
 
     if not filtered:
-        return "🔍 [S&P 500 특이 종목 (PER ≤ 20 & -30% 이상 하락)]\n• 조건에 해당하는 종목이 없습니다."
+        return "🔍 [S&P 500 가치주 (PER ≤ 20 & -30% 이상 하락)]\n• 조건에 해당하는 종목이 없습니다."
 
-    # 하락률이 높은 순으로 정렬
+    # 하락률순 정렬
     filtered.sort(key=lambda x: x["drop_pct"])
 
     lines = [
-        f"🔍 [S&P 500 특이 종목 (PER ≤ 20 & -30% 이상 하락)] (총 {len(filtered)}개)"
+        f"🔍 [S&P 500 가치주 (PER ≤ 20 & -30% 이상 하락)] (총 {len(filtered)}개)"
     ]
-    # 카카오톡 글자 수 제한을 고려해 하락률 상위 최대 10개 표시
-    for item in filtered[:10]:
+    # 요청대로 개수 제한 없이 전체 리스트 출력
+    for item in filtered:
         lines.append(
             f"• {item['symbol']} (PER {item['pe']:.1f}): 현재가 ${item['current']:,.2f} / 최고가 ${item['high']:,.2f} 대비 {item['drop_pct']:.2f}%"
         )
@@ -140,11 +115,14 @@ def get_sp500_filtered_stocks():
 def send_kakao_message(text, access_token):
     url = "https://kapi.kakao.com/v2/api/talk/memo/default/send"
     headers = {"Authorization": f"Bearer {access_token}"}
+
+    print(f"발송 메시지 전체 길이: {len(text)}자")
+
     payload = {
         "template_object": json.dumps(
             {
                 "object_type": "text",
-                "text": f"📊 증시·환율 리포트 & S&P500 가치주 탐색\n\n{text}",
+                "text": text,
                 "link": {
                     "web_url": "https://finance.yahoo.com",
                     "mobile_web_url": "https://finance.yahoo.com",
@@ -163,5 +141,10 @@ if __name__ == "__main__":
         market_summary = get_market_summary()
         sp500_summary = get_sp500_filtered_stocks()
 
-        full_message = f"{market_summary}\n\n{sp500_summary}"
+        full_message = f"📊 증시·환율 리포트\n\n{market_summary}\n\n{sp500_summary}"
+
+        # 혹시 전체 글자가 카카오톡 1000자 한계를 넘는 경우 대비 예방 조치
+        if len(full_message) > 990:
+            full_message = full_message[:980] + "\n...(이하 생략)"
+
         send_kakao_message(full_message, token)
