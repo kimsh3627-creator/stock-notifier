@@ -28,7 +28,7 @@ def get_access_token():
 def get_market_summary():
     results = []
 
-    # 1. 나스닥 및 S&P 500 (현재가 + 1년 최고가 대비)
+    # 1. 나스닥 및 S&P 500
     index_tickers = {"나스닥": "^IXIC", "S&P 500": "^GSPC"}
     for name, code in index_tickers.items():
         ticker = yf.Ticker(code)
@@ -44,7 +44,7 @@ def get_market_summary():
             text += f"• 1년 최고가 대비: {drop_pct:+.2f}% (최고가 {max_price_1y:,.2f})"
             results.append(text)
 
-    # 2. 원/달러 환율 (현재가만)
+    # 2. 원/달러 환율
     fx_ticker = yf.Ticker("KRW=X")
     fx_df = fx_ticker.history(period="5d", interval="1d")
     if not fx_df.empty:
@@ -56,7 +56,7 @@ def get_market_summary():
 
 def get_sp500_filtered_stocks():
     """
-    S&P 500 종목 필터링:
+    S&P 500 종목 필터링 (속도 최적화 버전)
     - 5 <= PER <= 15
     - 0 <= PBR <= 10
     - 1년 최고가 대비 -30% 이상 하락
@@ -66,16 +66,19 @@ def get_sp500_filtered_stocks():
         tables = pd.read_html(url)
         sp500_df = tables[0]
         raw_tickers = sp500_df["Symbol"].tolist()
+        tickers = [t.replace(".", "-") for t in raw_tickers]
     except Exception as e:
         print("S&P 500 티커 수집 실패:", e)
         return ""
 
     filtered = []
 
-    for raw_ticker in raw_tickers:
-        symbol = raw_ticker.replace(".", "-")
+    # 일괄 조회를 위해 Tickers 객체 생성 (실행 시간 몇 초 이내로 단축)
+    ticker_objects = yf.Tickers(" ".join(tickers))
+
+    for symbol in tickers:
         try:
-            t = yf.Ticker(symbol)
+            t = ticker_objects.tickers[symbol]
             info = t.info
 
             pe = info.get("trailingPE")
@@ -86,7 +89,7 @@ def get_sp500_filtered_stocks():
             if pe and pbr and high_52w and current_price:
                 drop_pct = ((current_price - high_52w) / high_52w) * 100
 
-                # 조건 검사: 5 <= PER <= 15, 0 <= PBR <= 10, drop_pct <= -30
+                # 조건: 5 <= PER <= 15, 0 <= PBR <= 10, drop_pct <= -30
                 if 5 <= pe <= 15 and 0 <= pbr <= 10 and drop_pct <= -30:
                     filtered.append(
                         {
@@ -104,7 +107,6 @@ def get_sp500_filtered_stocks():
     if not filtered:
         return "🔍 [S&P 500 특이 종목 (5≤PER≤15, 0≤PBR≤10, -30%↓)]\n• 조건에 해당하는 종목이 없습니다."
 
-    # 하락률이 높은 순서로 정렬
     filtered.sort(key=lambda x: x["drop_pct"])
 
     lines = [
@@ -112,7 +114,7 @@ def get_sp500_filtered_stocks():
     ]
     for item in filtered:
         lines.append(
-            f"• {item['symbol']} (PER {item['pe']:.1f} / PBR {item['pbr']:.2f}): 현재가 ${item['current']:,.2f} / 최고가 ${item['high']:,.2f} 대비 {item['drop_pct']:.2f}%"
+            f"• {item['symbol']} (PER {item['pe']:.1f}/PBR {item['pbr']:.2f}): ${item['current']:,.1f} / 고점 ${item['high']:,.1f} ({item['drop_pct']:.1f}%)"
         )
 
     return "\n".join(lines)
@@ -149,8 +151,8 @@ if __name__ == "__main__":
 
         full_message = f"📊 증시·환율 리포트\n\n{market_summary}\n\n{sp500_summary}"
 
-        # 카카오톡 텍스트 글자 수 한계(1000자) 대응 예방책
-        if len(full_message) > 990:
-            full_message = full_message[:980] + "\n...(길이 제한으로 이하 생략)"
+        # 카카오톡 글자 수 제한(1,000자) 안전 장치
+        if len(full_message) > 980:
+            full_message = full_message[:970] + "\n...(길이 제한으로 생략)"
 
         send_kakao_message(full_message, token)
