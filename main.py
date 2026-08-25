@@ -28,7 +28,7 @@ def get_access_token():
 def get_market_summary():
     results = []
 
-    # 1. 나스닥 및 S&P 500
+    # 1. 나스닥 및 S&P 500 (현재가 + 1년 최고가 대비)
     index_tickers = {"나스닥": "^IXIC", "S&P 500": "^GSPC"}
     for name, code in index_tickers.items():
         ticker = yf.Ticker(code)
@@ -44,7 +44,7 @@ def get_market_summary():
             text += f"• 1년 최고가 대비: {drop_pct:+.2f}% (최고가 {max_price_1y:,.2f})"
             results.append(text)
 
-    # 2. 원/달러 환율
+    # 2. 원/달러 환율 (현재가만)
     fx_ticker = yf.Ticker("KRW=X")
     fx_df = fx_ticker.history(period="5d", interval="1d")
     if not fx_df.empty:
@@ -56,7 +56,7 @@ def get_market_summary():
 
 def get_sp500_filtered_stocks():
     """
-    S&P 500 종목 필터링 (속도 최적화 버전)
+    S&P 500 상위 300개 종목 필터링:
     - 5 <= PER <= 15
     - 0 <= PBR <= 10
     - 1년 최고가 대비 -30% 이상 하락
@@ -65,57 +65,71 @@ def get_sp500_filtered_stocks():
         url = "https://en.wikipedia.org/wiki/List_of_S%26P_500_companies"
         tables = pd.read_html(url)
         sp500_df = tables[0]
-        raw_tickers = sp500_df["Symbol"].tolist()
-        tickers = [t.replace(".", "-") for t in raw_tickers]
+        # 상위 300개 종목 추출
+        raw_tickers = sp500_df["Symbol"].head(300).tolist()
     except Exception as e:
         print("S&P 500 티커 수집 실패:", e)
-        return ""
+        return "🔍 [S&P 500 특이 종목]\n• 데이터 수집 중 오류 발생"
 
     filtered = []
 
-    # 일괄 조회를 위해 Tickers 객체 생성 (실행 시간 몇 초 이내로 단축)
-    ticker_objects = yf.Tickers(" ".join(tickers))
+    # 50개씩 분할 처리하여 API 차단 방지 및 속도 최적화
+    chunk_size = 50
+    for i in range(0, len(raw_tickers), chunk_size):
+        chunk = raw_tickers[i : i + chunk_size]
+        chunk_symbols = [t.replace(".", "-") for t in chunk]
 
-    for symbol in tickers:
-        try:
-            t = ticker_objects.tickers[symbol]
-            info = t.info
+        ticker_objects = yf.Tickers(" ".join(chunk_symbols))
 
-            pe = info.get("trailingPE")
-            pbr = info.get("priceToBook")
-            high_52w = info.get("fiftyTwoWeekHigh")
-            current_price = info.get("currentPrice") or info.get("regularMarketPrice")
+        for symbol in chunk_symbols:
+            try:
+                t = ticker_objects.tickers[symbol]
+                info = t.info
 
-            if pe and pbr and high_52w and current_price:
-                drop_pct = ((current_price - high_52w) / high_52w) * 100
+                pe = info.get("trailingPE")
+                pbr = info.get("priceToBook")
+                high_52w = info.get("fiftyTwoWeekHigh")
+                current_price = info.get("currentPrice") or info.get(
+                    "regularMarketPrice"
+                )
 
-                # 조건: 5 <= PER <= 15, 0 <= PBR <= 10, drop_pct <= -30
-                if 5 <= pe <= 15 and 0 <= pbr <= 10 and drop_pct <= -30:
-                    filtered.append(
-                        {
-                            "symbol": symbol,
-                            "pe": pe,
-                            "pbr": pbr,
-                            "current": current_price,
-                            "high": high_52w,
-                            "drop_pct": drop_pct,
-                        }
-                    )
-        except Exception:
-            continue
+                if pe and pbr and high_52w and current_price:
+                    drop_pct = ((current_price - high_52w) / high_52w) * 100
+
+                    # 조건: 5 <= PER <= 15, 0 <= PBR <= 10, drop_pct <= -30
+                    if 5 <= pe <= 15 and 0 <= pbr <= 10 and drop_pct <= -30:
+                        filtered.append(
+                            {
+                                "symbol": symbol,
+                                "pe": pe,
+                                "pbr": pbr,
+                                "current": current_price,
+                                "high": high_52w,
+                                "drop_pct": drop_pct,
+                            }
+                        )
+            except Exception:
+                continue
 
     if not filtered:
         return "🔍 [S&P 500 특이 종목 (5≤PER≤15, 0≤PBR≤10, -30%↓)]\n• 조건에 해당하는 종목이 없습니다."
 
+    # 하락률이 높은 순서로 정렬
     filtered.sort(key=lambda x: x["drop_pct"])
 
     lines = [
-        f"🔍 [S&P 500 특이 종목 (5≤PER≤15, 0≤PBR≤10, -30%↓)] (총 {len(filtered)}개)"
+        f"🔍 [S&P 500 특이 종목 (5≤PER≤15, 0≤PBR≤10, -30%↓)] (상위 300개 중 {len(filtered)}개)"
     ]
-    for item in filtered:
+
+    # 카카오톡 글자 수 초과 방지: 최대 10개까지만 메시지에 포함
+    display_limit = 10
+    for item in filtered[:display_limit]:
         lines.append(
-            f"• {item['symbol']} (PER {item['pe']:.1f}/PBR {item['pbr']:.2f}): ${item['current']:,.1f} / 고점 ${item['high']:,.1f} ({item['drop_pct']:.1f}%)"
+            f"• {item['symbol']} (PER{item['pe']:.1f}/PBR{item['pbr']:.1f}): ${item['current']:,.1f} / 고점 ${item['high']:,.1f} ({item['drop_pct']:.1f}%)"
         )
+
+    if len(filtered) > display_limit:
+        lines.append(f"• 외 {len(filtered) - display_limit}개 종목 생략")
 
     return "\n".join(lines)
 
@@ -151,7 +165,7 @@ if __name__ == "__main__":
 
         full_message = f"📊 증시·환율 리포트\n\n{market_summary}\n\n{sp500_summary}"
 
-        # 카카오톡 글자 수 제한(1,000자) 안전 장치
+        # 카카오톡 텍스트 글자 수 제한(1,000자) 안전 장치
         if len(full_message) > 980:
             full_message = full_message[:970] + "\n...(길이 제한으로 생략)"
 
